@@ -6,6 +6,8 @@ const path = require("path");
 const fs = require("graceful-fs");
 const vm = require("vm");
 const { URL, pathToFileURL, fileURLToPath } = require("url");
+const { Blob } = require("node:buffer");
+
 const rimraf = require("rimraf");
 const checkArrayExpectation = require("./checkArrayExpectation");
 const createLazyTestEnv = require("./helpers/createLazyTestEnv");
@@ -446,6 +448,7 @@ const describeCases = config => {
 												require("./helpers/createFakeWorker")({
 													outputDirectory
 												});
+											baseModuleScope.Blob = Blob;
 											runInNewContext = true;
 										}
 										if (testConfig.moduleScope) {
