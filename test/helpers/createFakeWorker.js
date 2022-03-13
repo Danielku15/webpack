@@ -4,52 +4,66 @@ const { resolveObjectURL } = require("buffer");
 module.exports = ({ outputDirectory }) =>
 	class Worker {
 		constructor(url, options = {}) {
-			const parsedUrl = url instanceof URL ? url : new URL(url);
+			if (url instanceof URL) {
+				url = url.href;
+			}
 
 			this._bufferedMessages = [];
 			this._onmessage = undefined;
 
-			if (parsedUrl.protocol === "http:" || parsedUrl.protocol === "https:") {
-				expect(url.origin).toBe("https://test.cases");
-				expect(url.pathname.startsWith("/path/")).toBe(true);
-				const file = url.pathname.slice(6);
-				this.start(
-					url,
-					options,
-					`require(${JSON.stringify(path.resolve(outputDirectory, file))});`
-				);
-			} else if (parsedUrl.protocol === "blob:") {
-				const blob = resolveObjectURL(parsedUrl.href);
-				blob.text().then(value => {
-					this.start(url, options, value);
-				});
+			if (url.startsWith("http:") || url.startsWith("https:")) {
+				this.start(url, options, `importScripts(${JSON.stringify(url)});`);
+			} else if (url.startsWith("blob:")) {
+				const blob = resolveObjectURL(url);
+				blob
+					.text()
+					.then(workerCode => {
+						this.start("https://test.cases/path/", options, workerCode);
+					})
+					.catch(e => {
+						this.reportError(e);
+					});
 			} else {
 				throw new SyntaxError(
-					"Unsupported URL protocol, must be http:, https: or blob: but was " +
-						parsedUrl.protocol
+					`Unsupported URL protocol, must be http:, https: or blob: but was ${url}`
 				);
 			}
 		}
 
-		start(url, options, workerStartup) {
+		reportError(e) {
+			this._startError = e;
+			if (this._onmessage) {
+				this._onmessage(this._startError);
+			}
+		}
+
+		start(url, options, workerCode) {
 			const workerBootstrap = `
-const { parentPort } = require("worker_threads");
-const { URL } = require("url");
-const path = require("path");
-const fs = require("fs");
+${
+	options.type === "module"
+		? `
+		import { parentPort } from "worker_threads";
+		import { URL } from "url";
+		import * as path from "path";
+		import * as fs from "fs";	
+		`
+		: `
+		const { parentPort } = require("worker_threads");
+		const { URL } = require("url");
+		const path = require("path");
+		const fs = require("fs");
+		`
+}
+
 global.self = global;
 self.URL = URL;
 self.location = new URL(${JSON.stringify(url)});
-const urlToPath = url => {
+self.urlToPath = url => {
 	if(url.startsWith("https://test.cases/path/")) url = url.slice(24);
 	return path.resolve(${JSON.stringify(outputDirectory)}, \`./\${url}\`);
 };
-self.importScripts = url => {
-	${
-		options.type === "module"
-			? `throw new Error("importScripts is not supported in module workers")`
-			: `require(urlToPath(url))`
-	};
+self.importScripts = url => { 
+	require(urlToPath(url)) 
 };
 self.fetch = async url => {
 	try {
@@ -81,11 +95,23 @@ parentPort.on("message", data => {
 self.postMessage = data => {
 	parentPort.postMessage(data);
 };
-${workerStartup}
+${workerCode}
 `;
-			// eslint-disable-next-line node/no-unsupported-features/node-builtins
-			this.worker = new (require("worker_threads").Worker)(workerBootstrap, {
-				eval: true
+			if (options.type === "module") {
+				// eslint-disable-next-line node/no-unsupported-features/node-builtins
+				this.worker = new (require("worker_threads").Worker)(workerBootstrap, {
+					eval: true
+				});
+			} else {
+				const dataUrl =
+					`data:text/javascript;base64,` +
+					Buffer.from(workerBootstrap).toString("base64");
+				// eslint-disable-next-line node/no-unsupported-features/node-builtins
+				this.worker = new (require("worker_threads").Worker)(new URL(dataUrl));
+			}
+
+			this.worker.on("error", error => {
+				this.reportError(error);
 			});
 
 			if (this._onmessage) {
@@ -114,6 +140,10 @@ ${workerStartup}
 		}
 
 		postMessage(data) {
+			if (this._startError) {
+				throw this._startError;
+			}
+
 			if (this.worker) {
 				this.worker.postMessage(data);
 			} else {
@@ -122,6 +152,9 @@ ${workerStartup}
 		}
 
 		terminate() {
+			if (this._startError) {
+				throw this._startError;
+			}
 			return this.worker?.terminate();
 		}
 	};
