@@ -177,6 +177,7 @@ declare var __webpack_chunk_load__: (chunkId: string | number) => Promise<void>;
 declare var __webpack_get_script_filename__: (
 	chunkId: string | number
 ) => string;
+declare var __webpack_get_worker_url__: (url: URL) => string;
 declare var __webpack_is_included__: (request: string) => boolean;
 declare var __webpack_exports_info__: webpack.ExportsInfo;
 declare const __webpack_share_scopes__: Record<
